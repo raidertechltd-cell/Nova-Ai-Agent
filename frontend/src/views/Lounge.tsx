@@ -11,6 +11,8 @@ export default function Lounge(){
 
   const [novaState,setNovaState]=useState<NovaState>('idle')
   const [overlay,setOverlay]=useState<Overlay>(null)
+  const [voiceActive,setVoiceActive]=useState(false)
+  const [voiceSupported,setVoiceSupported]=useState(true)
   const stateRef=useRef<NovaState>('idle')
   const audioRef=useRef<HTMLAudioElement|null>(null)
   const recognitionRef=useRef<any>(null)
@@ -91,22 +93,29 @@ export default function Lounge(){
     }
   }, [overlay, speakText])
 
-  // ── Always-on SpeechRecognition ──
+  // ── SpeechRecognition (voice input) ──
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) return
+    if (!SpeechRecognition) {
+      setVoiceSupported(false)
+      return
+    }
+    setVoiceSupported(true)
 
     let recognition: any
     let stopped = false
+    let permissionDenied = false
 
     function startRec() {
-      if (stopped) return
+      if (stopped || permissionDenied) return
       try {
         recognition = new SpeechRecognition()
         recognitionRef.current = recognition
         recognition.continuous = true
         recognition.interimResults = false
         recognition.lang = 'en-US'
+
+        recognition.onstart = () => setVoiceActive(true)
 
         recognition.onresult = (ev: any) => {
           if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return
@@ -130,14 +139,19 @@ export default function Lounge(){
           }
         }
 
-        recognition.onerror = () => {
+        recognition.onerror = (err: any) => {
+          if (err.error === 'not-allowed') {
+            permissionDenied = true
+            setVoiceActive(false)
+            return
+          }
           if (!stopped) {
             restartTimeoutRef.current = window.setTimeout(startRec, 1000)
           }
         }
 
         recognition.onend = () => {
-          if (!stopped) {
+          if (!stopped && !permissionDenied) {
             restartTimeoutRef.current = window.setTimeout(startRec, 500)
           }
         }
@@ -159,6 +173,24 @@ export default function Lounge(){
       recognitionRef.current = null
     }
   }, [sendCommand])
+
+  function pushToTalk() {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (!SpeechRecognition) return
+    setVoiceActive(true)
+    const rec = new SpeechRecognition()
+    rec.continuous = false
+    rec.interimResults = false
+    rec.lang = 'en-US'
+    rec.onresult = (ev: any) => {
+      const transcript = ev.results[0][0].transcript.trim()
+      if (transcript) sendCommand(transcript)
+      setVoiceActive(false)
+    }
+    rec.onerror = () => setVoiceActive(false)
+    rec.onend = () => setVoiceActive(false)
+    try { rec.start() } catch { setVoiceActive(false) }
+  }
 
   // ── Clap detection via Web Audio API (Electron desktop) ──
   useEffect(() => {
@@ -394,9 +426,14 @@ export default function Lounge(){
         </div>
       </div>
       <form className="text-input-bar" onSubmit={handleInputSubmit}>
-        <input ref={inputRef} type="text" placeholder='Say "Nova" or type a command...' />
+        <button type="button" className={`voice-toggle ${voiceActive?'listening':''} ${!voiceSupported?'hidden':''}`}
+          onClick={pushToTalk} title="Push to talk">
+          {voiceActive ? '🔴' : '🎙'}
+        </button>
+        <input ref={inputRef} type="text" placeholder={voiceSupported ? 'Say "Nova" or type...' : 'Type a command...'} />
         <button type="submit">Send</button>
       </form>
+      {!voiceSupported && <div className="voice-unavailable">Voice input not supported in this browser. Type above.</div>}
     </div>
   )
 }

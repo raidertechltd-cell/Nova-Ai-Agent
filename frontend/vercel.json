@@ -1,5 +1,5 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/api/(.*)", "destination": "https://nova-backend.onrender.com/api/$1" }]
+  "rewrites": [{ "source": "/api/(.*)", "destination": "https://nova-ai-agent-2.onrender.com/api/$1" }]
 }

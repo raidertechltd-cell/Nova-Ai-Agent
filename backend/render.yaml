@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: nova-backend
+    env: node
+    region: ohio
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: DATABASE_FILE
+        value: /var/data/nova.sqlite
+      - key: AWS_REGION
+        value: eu-north-1
+      - key: BEDROCK_MODEL
+        value: eu.amazon.nova-micro-v1:0
+      - key: AWS_BEARER_TOKEN_BEDROCK
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+    disk:
+      name: nova-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -12,15 +12,15 @@ services:
       - key: DATABASE_FILE
         value: /var/data/nova.sqlite
       - key: AWS_REGION
-        value: eu-north-1
+        value: eu-west-1
       - key: BEDROCK_MODEL
-        value: eu.amazon.nova-micro-v1:0
+        value: amazon.nova-micro-v1:0
       - key: AWS_BEARER_TOKEN_BEDROCK
         sync: false
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE
-        sync: false
+        value: pNInz6obpgDQGcFmaJgB
       - key: OPENAI_API_KEY
         sync: false
       - key: PAYSTACK_SECRET_KEY

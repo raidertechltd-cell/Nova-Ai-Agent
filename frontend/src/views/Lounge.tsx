@@ -18,6 +18,27 @@ export default function Lounge(){
 
   stateRef.current=novaState
 
+  const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
+
+  const speakText = useCallback((text: string) => {
+    if (!('speechSynthesis' in window)) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 1.05
+    utterance.pitch = 1.0
+    synthRef.current = utterance
+    utterance.onstart = () => setNovaState('speaking')
+    utterance.onend = () => {
+      setNovaState('idle')
+      synthRef.current = null
+    }
+    utterance.onerror = () => setNovaState('idle')
+    window.speechSynthesis.speak(utterance)
+  }, [])
+
+  const pollAudioRef = useRef<number>(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+
   const sendCommand = useCallback(async (text: string) => {
     setNovaState('thinking')
     try {
@@ -31,29 +52,44 @@ export default function Lounge(){
         const map: Record<string, Overlay> = { SHOW_WALLET: 'wallet', SHOW_ANALYTICS: 'analytics', SHOW_BACKUP: 'backup', HIDE_DASHBOARD: null }
         setOverlay(map[data.intent] ?? overlay)
       }
-      if (data.audio) {
-        const binary = atob(data.audio)
-        const bytes = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-        const blob = new Blob([bytes], { type: 'audio/mpeg' })
-        const url = URL.createObjectURL(blob)
-        const audio = new Audio(url)
-        audioRef.current = audio
-        audio.onplay = () => setNovaState('speaking')
-        audio.onended = () => {
-          setNovaState('idle')
-          URL.revokeObjectURL(url)
-          audioRef.current = null
+      // Speak text immediately via browser TTS
+      if (data.reply) speakText(data.reply)
+      // Poll for high-quality audio in background
+      if (data.audioId) {
+        const id = data.audioId
+        const maxRetries = 30
+        let tries = 0
+        const poll = () => {
+          pollAudioRef.current = window.setTimeout(async () => {
+            tries++
+            if (tries > maxRetries) return
+            try {
+              const statusRes = await fetch(`/api/audio-status/${id}`)
+              const status = await statusRes.json()
+              if (status.ready) {
+                const audio = new Audio(`/api/audio/${id}.mp3`)
+                audioRef.current = audio
+                audio.onplay = () => {
+                  window.speechSynthesis.cancel()
+                  setNovaState('speaking')
+                }
+                audio.onended = () => {
+                  setNovaState('idle')
+                  audioRef.current = null
+                }
+                audio.play().catch(() => {})
+              } else {
+                poll()
+              }
+            } catch { poll() }
+          }, 500)
         }
-        audio.onerror = () => setNovaState('idle')
-        await audio.play()
-      } else {
-        setNovaState('idle')
+        poll()
       }
     } catch {
       setNovaState('idle')
     }
-  }, [overlay])
+  }, [overlay, speakText])
 
   // ── Always-on SpeechRecognition ──
   useEffect(() => {
@@ -333,6 +369,16 @@ export default function Lounge(){
     return ()=>{cancelAnimationFrame(raf);window.removeEventListener('resize',resize)}
   },[])
 
+  const handleInputSubmit = useCallback((e: React.FormEvent) => {
+    e.preventDefault()
+    const el = inputRef.current
+    const val = el?.value?.trim()
+    if (val && el) {
+      sendCommand(val)
+      el.value = ''
+    }
+  }, [sendCommand])
+
   return (
     <div>
       <div className="rainbow-bg" />
@@ -347,6 +393,10 @@ export default function Lounge(){
           <button className="close-btn" onClick={()=>setOverlay(null)}>✕</button>
         </div>
       </div>
+      <form className="text-input-bar" onSubmit={handleInputSubmit}>
+        <input ref={inputRef} type="text" placeholder='Say "Nova" or type a command...' />
+        <button type="submit">Send</button>
+      </form>
     </div>
   )
 }

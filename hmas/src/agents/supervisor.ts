@@ -2,7 +2,8 @@ import { CentralState } from '../state'
 import { MemoryProvider } from '../memory/memoryProvider'
 import { Task, UUID } from '../types'
 import { uuid } from '../utils/uuid'
-import { evaluateResult } from '../utils/evaluator'
+import { evaluateResult, asyncEvaluateWithLLM } from '../utils/evaluator'
+import { decomposeWithLLM } from '../planner'
 
 type AgentPerformer = { perform: (task: Task) => Promise<any>; name?: string }
 
@@ -18,7 +19,7 @@ export class Supervisor {
     const context = await this.memory.query(command, 5)
 
     // 2) Decompose into subtasks
-    const subtasks: Task[] = this.decompose(command, context)
+    const subtasks: Task[] = await this.decompose(command, context)
 
     // 3) Create, assign, execute, evaluate, and persist
     for (const t of subtasks) {
@@ -44,7 +45,12 @@ export class Supervisor {
           // Persist result to memory with metadata
           await this.memory.save({ id: uuid('mem-'), text: JSON.stringify(result), metadata: { taskId: t.id, agent: agentName, attempt }, createdAt: new Date().toISOString() })
 
-          const evalRes = evaluateResult(result)
+          let evalRes = evaluateResult(result)
+          try {
+            evalRes = await asyncEvaluateWithLLM(t.description, result)
+          } catch (e) {
+            // keep sync evalRes
+          }
           if (evalRes.ok) {
             this.state.completeTask(t.id, result)
             break
@@ -67,13 +73,16 @@ export class Supervisor {
     }
   }
 
-  decompose(command: string, context: any): Task[] {
-    // Rule-based decomposition: extend or replace with LLM-based planner
-    const id1 = uuid('task-')
-    const id2 = uuid('task-')
-    return [
-      { id: id1, description: `Analyze: ${command}`, assignedTo: 'AnalystAgent', status: 'pending', attempts: 0 },
-      { id: id2, description: `Finance check: ${command}`, assignedTo: 'FinanceAgent', status: 'pending', attempts: 0 },
-    ]
+  async decompose(command: string, context: any): Promise<Task[]> {
+    try {
+      return await decomposeWithLLM(command, context)
+    } catch (e) {
+      const id1 = uuid('task-')
+      const id2 = uuid('task-')
+      return [
+        { id: id1, description: `Analyze: ${command}`, assignedTo: 'AnalystAgent', status: 'pending', attempts: 0 },
+        { id: id2, description: `Finance check: ${command}`, assignedTo: 'FinanceAgent', status: 'pending', attempts: 0 },
+      ]
+    }
   }
 }

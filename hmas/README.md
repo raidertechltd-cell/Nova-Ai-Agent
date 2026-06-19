@@ -19,3 +19,9 @@ Environment variables:
 Notes:
 - `PostgresVectorProvider` requires a `memory` table with a `vector` column and `pgvector` extension. The implementation is a skeleton and may need SQL adjustments for your Postgres setup.
 
+Integration notes:
+- Planner: `hmas/src/planner.ts` uses `OPENAI_API_KEY` to decompose user commands into subtasks assigned to worker agents. Without a key it falls back to rule-based splitting.
+- Evaluator: `hmas/src/utils/evaluator.ts` can call the LLM to score agent outputs. Without `OPENAI_API_KEY` a simple check is used.
+- LangGraph: `hmas/src/langgraph.ts` provides a minimal wrapper; replace with an actual LangGraph DAG when ready.
+
+

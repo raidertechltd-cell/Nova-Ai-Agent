@@ -3,8 +3,6 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 type NovaState = 'idle' | 'listening' | 'thinking' | 'speaking'
 type Overlay = null | 'analytics' | 'wallet' | 'backup'
 
-let wakeWordPending = false
-
 export default function Lounge(){
   const miniOrbRef=useRef<HTMLCanvasElement>(null)
   const waveRef=useRef<HTMLCanvasElement>(null)
@@ -21,25 +19,30 @@ export default function Lounge(){
   stateRef.current=novaState
 
   const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
+  const pollAudioRef = useRef<number>(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const cancelledSynth = useRef(false)
 
   const speakText = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) return
     window.speechSynthesis.cancel()
+    cancelledSynth.current = false
     const utterance = new SpeechSynthesisUtterance(text)
     utterance.rate = 1.05
     utterance.pitch = 1.0
     synthRef.current = utterance
     utterance.onstart = () => setNovaState('speaking')
     utterance.onend = () => {
-      setNovaState('idle')
-      synthRef.current = null
+      if (!cancelledSynth.current) {
+        setNovaState('idle')
+        synthRef.current = null
+      }
     }
-    utterance.onerror = () => setNovaState('idle')
+    utterance.onerror = () => {
+      if (!cancelledSynth.current) setNovaState('idle')
+    }
     window.speechSynthesis.speak(utterance)
   }, [])
-
-  const pollAudioRef = useRef<number>(0)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   const sendCommand = useCallback(async (text: string) => {
     setNovaState('thinking')
@@ -56,7 +59,7 @@ export default function Lounge(){
       }
       // Speak text immediately via browser TTS
       if (data.reply) speakText(data.reply)
-      // Poll for high-quality audio in background
+      // Poll for high-quality audio and switch when ready
       if (data.audioId) {
         const id = data.audioId
         const maxRetries = 30
@@ -69,12 +72,13 @@ export default function Lounge(){
               const statusRes = await fetch(`/api/audio-status/${id}`)
               const status = await statusRes.json()
               if (status.ready) {
+                // Cancel browser TTS first, then play high-quality audio
+                cancelledSynth.current = true
+                window.speechSynthesis.cancel()
+                await new Promise(r => setTimeout(r, 50))
                 const audio = new Audio(`/api/audio/${id}.mp3`)
                 audioRef.current = audio
-                audio.onplay = () => {
-                  window.speechSynthesis.cancel()
-                  setNovaState('speaking')
-                }
+                audio.onplay = () => setNovaState('speaking')
                 audio.onended = () => {
                   setNovaState('idle')
                   audioRef.current = null
@@ -120,22 +124,11 @@ export default function Lounge(){
         recognition.onresult = (ev: any) => {
           if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return
           for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            const transcript = ev.results[i][0].transcript.trim().toLowerCase()
-            const novaIdx = transcript.indexOf('nova')
-            if (novaIdx !== -1) {
-              const command = transcript.slice(novaIdx + 4).trim()
-              if (command) {
-                sendCommand(command)
-              } else {
-                wakeWordPending = true
-              }
-              return
-            }
-            if (wakeWordPending && transcript.length > 0) {
-              wakeWordPending = false
-              sendCommand(transcript)
-              return
-            }
+            const transcript = ev.results[i][0].transcript.trim()
+            if (!transcript) continue
+            // Send everything said as a command (no wake word required)
+            sendCommand(transcript)
+            return
           }
         }
 

@@ -1,5 +1,6 @@
 require('dotenv').config()
 const express = require('express')
+const path = require('path')
 const bodyParser = require('body-parser')
 const voice = require('./routes/voice')
 const marketing = require('./routes/marketing')
@@ -7,6 +8,7 @@ const paystack = require('./routes/paystack')
 const finance = require('./routes/finance')
 const db = require('./db')
 const memory = require('./memory')
+const audioStore = require('./audio-store')
 
 const app = express()
 
@@ -29,6 +31,16 @@ app.use('/api/voice-command', voice)
 app.use('/api/marketing', marketing)
 app.use('/api/paystack', paystack)
 app.use('/api/finance', finance)
+
+// Audio status endpoint — frontend polls this to know when file is ready
+app.get('/api/audio-status/:id', (req, res) => {
+  const entry = audioStore.get(req.params.id)
+  if (!entry) return res.status(404).json({ error: 'not found' })
+  res.json({ ready: entry.ready, url: entry.ready ? `/api/audio/${req.params.id}.mp3` : null })
+})
+
+// Serve generated audio files
+app.use('/api/audio', express.static(path.resolve(__dirname, '..', 'data', 'audio')))
 
 app.get('/api/health', async (req, res) => {
   const recent = await memory.getRecent(3).catch(() => [])

@@ -1,0 +1,14 @@
+{
+  "name": "nova-sentinel",
+  "version": "0.1.0",
+  "private": true,
+  "main": "sentinel.js",
+  "scripts": {
+    "start": "node sentinel.js",
+    "dev": "node sentinel.js --debug"
+  },
+  "dependencies": {
+    "mic": "^2.1.2",
+    "ws": "^8.0.0"
+  }
+}

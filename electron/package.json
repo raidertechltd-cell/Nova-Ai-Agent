@@ -1,0 +1,14 @@
+{
+  "name": "nova-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "ELECTRON_DEV=1 electron ."
+  },
+  "dependencies": {
+    "electron": "^33.0.0",
+    "ws": "^8.0.0"
+  }
+}

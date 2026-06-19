@@ -49,7 +49,7 @@ db.ready.then(async () => {
       const SK = colonIdx > 0 ? decoded.slice(colonIdx + 1) : ''
       // Force module loading (they stay in require cache)
       const { BedrockRuntimeClient } = require('@aws-sdk/client-bedrock-runtime')
-      const client = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'eu-north-1', credentials: { accessKeyId: AK, secretAccessKey: SK } })
+      const client = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'eu-west-1', credentials: { accessKeyId: AK, secretAccessKey: SK } })
       // Force credential resolution (no API call, just resolves env/chain)
       await client.config.credentials()
       console.log('[warm] Bedrock client ready')
@@ -57,4 +57,11 @@ db.ready.then(async () => {
   }
 
   app.listen(PORT, () => console.log('Nova backend listening on', PORT))
+    // start websocket server for local IPC/signals
+    try {
+      const { startWsServer } = require('./ws-server')
+      startWsServer()
+    } catch (e) {
+      console.warn('Could not start ws-server:', e.message)
+    }
 })

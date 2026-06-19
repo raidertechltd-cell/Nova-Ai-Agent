@@ -124,6 +124,54 @@ export default function Lounge(){
     }
   }, [sendCommand])
 
+  // ── Clap detection via Web Audio API (Electron desktop) ──
+  useEffect(() => {
+    const desktop = (window as any).novaDesktop
+    if (!desktop?.isDesktop) return
+
+    let audioCtx: AudioContext | null = null
+    let source: MediaStreamAudioSourceNode | null = null
+    let analyser: AnalyserNode | null = null
+    let raf: number
+    const CLAP_THRESHOLD = 0.3
+    const CLAP_COOLDOWN = 2000
+    let lastClap = 0
+    const dataArray = new Uint8Array(128)
+
+    async function startClapDetection() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+        audioCtx = new AudioContext()
+        source = audioCtx.createMediaStreamSource(stream)
+        analyser = audioCtx.createAnalyser()
+        analyser.fftSize = 256
+        source.connect(analyser)
+
+        function detect() {
+          analyser!.getByteTimeDomainData(dataArray)
+          let sum = 0
+          for (let i = 0; i < dataArray.length; i++) {
+            const val = dataArray[i] / 128 - 1
+            sum += val * val
+          }
+          const rms = Math.sqrt(sum / dataArray.length)
+          if (rms > CLAP_THRESHOLD && Date.now() - lastClap > CLAP_COOLDOWN) {
+            lastClap = Date.now()
+            desktop.sendWakeSignal()
+          }
+          raf = requestAnimationFrame(detect)
+        }
+        detect()
+      } catch {}
+    }
+
+    startClapDetection()
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      if (audioCtx) audioCtx.close()
+    }
+  }, [])
+
   // ── Mini Orb (lightning) ──
   useEffect(()=>{
     const canvas=miniOrbRef.current!

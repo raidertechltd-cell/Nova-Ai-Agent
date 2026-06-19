@@ -15,7 +15,7 @@ export class InMemoryProvider implements MemoryProvider {
     if (!record.embedding) {
       try {
         record.embedding = await computeEmbedding(record.text)
-      } catch (e) {
+      } catch {
         // fallback: leave undefined
       }
     }
@@ -36,7 +36,7 @@ export class PostgresVectorProvider implements MemoryProvider {
 
   constructor(private connectionString: string, private table = 'memory') {
     this.client = new Client({ connectionString })
-    this.client.connect().catch((e) => {
+    this.client.connect().catch((e: any) => {
       console.warn('PostgresVectorProvider connection failed:', e.message)
     })
   }
@@ -51,7 +51,7 @@ export class PostgresVectorProvider implements MemoryProvider {
     const sql = `INSERT INTO ${this.table} (id, text, embedding, metadata, created_at) VALUES ($1,$2,$3,$4,$5)`
     try {
       await this.client.query(sql, [record.id, record.text, record.embedding, record.metadata || {}, record.createdAt])
-    } catch (e) {
+    } catch (e: any) {
       // In a production implementation, handle conflicts and retries.
       console.error('PostgresVectorProvider.save error', e.message)
       throw e
@@ -66,7 +66,7 @@ export class PostgresVectorProvider implements MemoryProvider {
     try {
       const res = await this.client.query(sql, [embedding, topK])
       return res.rows.map((r: any) => ({ id: r.id, text: r.text, metadata: r.metadata, createdAt: r.created_at }))
-    } catch (e) {
+    } catch (e: any) {
       console.error('PostgresVectorProvider.query error', e.message)
       throw e
     }

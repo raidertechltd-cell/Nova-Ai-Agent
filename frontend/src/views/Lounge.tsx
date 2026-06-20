@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
 type NovaState = 'idle' | 'listening' | 'thinking' | 'speaking'
-type Overlay = null | 'analytics' | 'wallet' | 'backup'
+type WidgetData = { type: string; title: string; data: any }
 
 export default function Lounge(){
   const miniOrbRef=useRef<HTMLCanvasElement>(null)
   const waveRef=useRef<HTMLCanvasElement>(null)
 
   const [novaState,setNovaState]=useState<NovaState>('idle')
-  const [overlay,setOverlay]=useState<Overlay>(null)
+  const [overlay,setOverlay]=useState<boolean>(false)
+  const [widgetData,setWidgetData]=useState<WidgetData|null>(null)
   const stateRef=useRef<NovaState>('idle')
   const audioRef=useRef<HTMLAudioElement|null>(null)
   const recognitionRef=useRef<any>(null)
@@ -66,9 +67,12 @@ export default function Lounge(){
         body: JSON.stringify({ text }),
       })
       const data = await res.json()
-      if (data.intent) {
-        const map: Record<string, Overlay> = { SHOW_WALLET: 'wallet', SHOW_ANALYTICS: 'analytics', SHOW_BACKUP: 'backup', HIDE_DASHBOARD: null }
-        setOverlay(map[data.intent] ?? overlay)
+      if (data.widget) {
+        setWidgetData(data.widget)
+        setOverlay(true)
+      } else if (data.intent === 'hide_overlay') {
+        setOverlay(false)
+        setWidgetData(null)
       }
       if (data.audioId) {
         const id = data.audioId
@@ -113,7 +117,7 @@ export default function Lounge(){
     } catch {
       setNovaState('idle')
     }
-  }, [overlay])
+  }, [])
 
   // ── SpeechRecognition with wake-word ──
   useEffect(() => {
@@ -443,6 +447,70 @@ export default function Lounge(){
     return ()=>{cancelAnimationFrame(raf);window.removeEventListener('resize',resize)}
   },[])
 
+  function closeOverlay(){
+    setOverlay(false)
+    setWidgetData(null)
+  }
+
+  function DynamicWidget({ widget }: { widget: WidgetData }) {
+    if (widget.type === 'stats' && Array.isArray(widget.data)) {
+      return (
+        <>
+          <h3>{widget.title}</h3>
+          <div className="stat-grid">
+            {(widget.data as {label:string;value:string|number}[]).map((s,i) => (
+              <div key={i} className="stat-card">
+                <div className="label">{s.label}</div>
+                <div className="value">{s.value}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )
+    }
+    if (widget.type === 'table') {
+      const { columns, rows } = widget.data
+      return (
+        <>
+          <h3>{widget.title}</h3>
+          <table className="widget-table">
+            <thead><tr>{columns.map((c:string,i:number) => <th key={i}>{c}</th>)}</tr></thead>
+            <tbody>{rows.map((r:any[],i:number) => <tr key={i}>{r.map((v:any,j:number) => <td key={j}>{v}</td>)}</tr>)}</tbody>
+          </table>
+        </>
+      )
+    }
+    if (widget.type === 'chart') {
+      const { labels, values } = widget.data
+      const max = Math.max(...values, 1)
+      return (
+        <>
+          <h3>{widget.title}</h3>
+          <div className="bar-chart">
+            {values.map((v:number,i:number) => (
+              <div key={i} className="bar" style={{height:`${(v/max)*100}%`}} title={`${labels[i]}: ${v}`} />
+            ))}
+          </div>
+          <div className="chart-labels">{labels.join(' · ')}</div>
+        </>
+      )
+    }
+    if (widget.type === 'text') {
+      return (
+        <>
+          <h3>{widget.title}</h3>
+          <div className="widget-text">{(widget.data as any).content || widget.data}</div>
+        </>
+      )
+    }
+    return (
+      <>
+        <h3>{widget.title || 'Data'}</h3>
+        <pre className="widget-raw">{JSON.stringify(widget.data, null, 2)}</pre>
+      </>
+    )
+  }
+
   return (
     <div>
       <div className="rainbow-bg" />
@@ -452,9 +520,10 @@ export default function Lounge(){
       </div>
       <canvas id="wave-canvas" ref={waveRef} />
       <div className={`glass-overlay ${overlay?'active':''}`}>
-        <div className="backdrop" onClick={()=>setOverlay(null)} />
+        <div className="backdrop" onClick={closeOverlay} />
         <div className="panel">
-          <button className="close-btn" onClick={()=>setOverlay(null)}>✕</button>
+          <button className="close-btn" onClick={closeOverlay}>✕</button>
+          {widgetData && <DynamicWidget widget={widgetData} />}
         </div>
       </div>
     </div>

@@ -4,9 +4,10 @@ const wallet = require('./wallet')
 const analytics = require('./analytics')
 const paystack = require('./paystack')
 const obsidian = require('./obsidian')
+const memory = require('../memory')
 const { logToolCall, checkDestructive } = require('../security_gate')
 
-const TOOL_DEFS = {
+const CORE_TOOL_DEFS = {
   show_wallet: {
     description: 'Show the user their wallet/financial information including balances and transactions',
     params: {},
@@ -92,11 +93,59 @@ const TOOL_DEFS = {
     destructive: false,
     handler: async () => obsidian.listNotes(),
   },
+  dynamic_widget: {
+    description: 'Render arbitrary data in the glass overlay as a dynamic widget (tables, stat-cards, charts, text). Pass the rendered HTML or structured data as JSON.',
+    params: { widgetType: { type: 'string', description: 'One of: table, stats, chart, text, custom' }, title: { type: 'string', description: 'Widget title' }, data: { type: 'object', description: 'Structured data to render. For stats: [{label, value}]. For table: {columns: [...], rows: [[...]]}. For chart: {labels: [...], values: [...]}. For text: {content: string}.' } },
+    destructive: false,
+    handler: async ({ widgetType, title, data }) => {
+      return { status: 'success', widget: { type: widgetType, title, data }, data: `Rendered ${widgetType} widget: ${title}` }
+    },
+  },
+}
+
+// ── Discovered tools are loaded from memory on startup ──
+async function loadDiscoveredTools() {
+  const stored = await memory.query('__discovered_tools__', 50)
+  for (const row of stored) {
+    if (!row.metadata) continue
+    try {
+      const meta = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata
+      if (meta._toolDef) {
+        const name = meta._toolName
+        if (name && !CORE_TOOL_DEFS[name]) {
+          CORE_TOOL_DEFS[name] = meta._toolDef
+        }
+      }
+    } catch {}
+  }
+}
+
+// ── Fuzzy match: find closest tool by keyword overlap ──
+function fuzzyFindTool(text) {
+  const lower = text.toLowerCase()
+  const words = lower.split(/\s+/)
+  let bestScore = 0
+  let bestName = null
+  for (const [name, def] of Object.entries(CORE_TOOL_DEFS)) {
+    const desc = def.description.toLowerCase()
+    const nameWords = name.replace(/_/g, ' ').toLowerCase().split(/\s+/)
+    let score = 0
+    for (const w of words) {
+      if (w.length < 3) continue
+      if (desc.includes(w)) score += 2
+      if (nameWords.some(nw => nw.includes(w) || w.includes(nw))) score += 3
+    }
+    if (score > bestScore) {
+      bestScore = score
+      bestName = name
+    }
+  }
+  return bestScore >= 3 ? bestName : null
 }
 
 function getBedrockTools() {
   const tools = []
-  for (const [name, def] of Object.entries(TOOL_DEFS)) {
+  for (const [name, def] of Object.entries(CORE_TOOL_DEFS)) {
     const props = {}
     const required = []
     for (const [k, v] of Object.entries(def.params)) {
@@ -121,7 +170,7 @@ function getBedrockTools() {
 }
 
 async function executeTool(toolName, params, intent) {
-  const def = TOOL_DEFS[toolName]
+  const def = CORE_TOOL_DEFS[toolName]
   if (!def) return { status: 'error', message: `Unknown tool: ${toolName}` }
 
   const gate = checkDestructive(toolName)
@@ -138,4 +187,19 @@ async function executeTool(toolName, params, intent) {
   }
 }
 
-module.exports = { TOOL_DEFS, getBedrockTools, executeTool }
+async function registerTool(name, description, params, destructive, handler) {
+  const def = { description, params, destructive, handler }
+  CORE_TOOL_DEFS[name] = def
+  await memory.save(`discovered tool: ${name} - ${description}`, {
+    role: 'system',
+    _toolName: name,
+    _toolDef: def,
+    source: 'discovery',
+  }).catch(() => {})
+  return { status: 'success', tool: name }
+}
+
+// Load discovered tools from memory on startup
+loadDiscoveredTools()
+
+module.exports = { CORE_TOOL_DEFS, getBedrockTools, executeTool, fuzzyFindTool, registerTool }

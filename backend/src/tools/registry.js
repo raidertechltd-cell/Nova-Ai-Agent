@@ -199,7 +199,12 @@ async function registerTool(name, description, params, destructive, handler) {
   return { status: 'success', tool: name }
 }
 
-// Load discovered tools from memory on startup
-loadDiscoveredTools()
+// Load discovered tools from memory once DB is ready
+try {
+  const db = require('../db')
+  if (db.ready) {
+    db.ready.then(() => loadDiscoveredTools()).catch(() => {})
+  }
+} catch {} // DB may not be available in all contexts
 
 module.exports = { CORE_TOOL_DEFS, getBedrockTools, executeTool, fuzzyFindTool, registerTool }

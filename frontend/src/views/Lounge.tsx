@@ -70,7 +70,7 @@ export default function Lounge(){
       if (data.widget) {
         setWidgetData(data.widget)
         setOverlay(true)
-      } else if (data.intent === 'hide_overlay') {
+      } else if (data.intent === 'hide_overlay' || data.intent === 'stand_down') {
         setOverlay(false)
         setWidgetData(null)
       }

@@ -7,6 +7,10 @@ const ttsService = require('../tts-service')
 const router = express.Router()
 const supervisor = new SupervisorGraph()
 
+function isStandDown(text) {
+  return /\bstand\s*down\b/i.test(text)
+}
+
 router.post('/', async (req, res) => {
   const tReq = Date.now()
   const { text } = req.body
@@ -15,6 +19,14 @@ router.post('/', async (req, res) => {
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'text is required' })
   }
+
+  // Emergency Override: Nova, Stand Down
+  if (isStandDown(text)) {
+    const reply = 'Standing down, sir.'
+    const { audioId } = ttsService.speak(reply, requestId)
+    return res.json({ status: 'accepted', reply, audioId, intent: 'stand_down', requestId })
+  }
+
   try {
     const result = await supervisor.execute(text)
 
@@ -39,6 +51,13 @@ router.post('/transcribe', async (req, res) => {
   }
   try {
     const transcript = await transcribe(audio, mimeType || 'audio/webm')
+
+    // Emergency Override: Nova, Stand Down
+    if (isStandDown(transcript)) {
+      const reply = 'Standing down, sir.'
+      const { audioId } = ttsService.speak(reply, requestId)
+      return res.json({ status: 'accepted', transcript, reply, audioId, intent: 'stand_down', requestId })
+    }
     console.log(`[timing] whisper transcribe: ${Date.now() - t0}ms`)
 
     if (!transcript || !transcript.trim()) {

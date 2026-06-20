@@ -1,5 +1,18 @@
 const https = require('https')
 
+function httpsGet(hostname, path) {
+  return new Promise((resolve, reject) => {
+    const opts = { hostname, path, method: 'GET', headers: { 'User-Agent': 'Nova-AI/1.0' } }
+    const req = https.request(opts, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => resolve(Buffer.concat(chunks).toString()))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 function httpsPost(hostname, path, apiKey, body) {
   return new Promise((resolve, reject) => {
     const data = Buffer.from(JSON.stringify(body))
@@ -60,17 +73,47 @@ async function serperSearch(query) {
   }
 }
 
+async function duckDuckGoSearch(query) {
+  const html = await httpsGet('html.duckduckgo.com', `/html/?q=${encodeURIComponent(query)}`)
+  // Extract results from the HTML page
+  const results = []
+  const resultRegex = /<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g
+  let match
+  let count = 0
+  while ((match = resultRegex.exec(html)) !== null && count < 5) {
+    const url = match[1].replace(/\/\/duckduckgo\.com\/l\/\?uddg=/, '').replace(/&rut=.*$/, '')
+    results.push({
+      title: match[2].replace(/<[^>]+>/g, '').trim(),
+      url: decodeURIComponent(url),
+      snippet: match[3].replace(/<[^>]+>/g, '').trim(),
+    })
+    count++
+  }
+  return {
+    status: 'success',
+    source: 'duckduckgo',
+    data: results,
+  }
+}
+
 async function performWebSearch(query) {
   if (!query || !query.trim()) {
     return { status: 'error', message: 'Query is required.' }
   }
+  // Try Tavily first (requires TAVILY_API_KEY)
   if (process.env.TAVILY_API_KEY) {
-    return await tavilySearch(query)
+    try { return await tavilySearch(query) } catch (e) { console.error('[web] Tavily failed:', e.message) }
   }
+  // Try Serper second (requires SERPER_API_KEY)
   if (process.env.SERPER_API_KEY) {
-    return await serperSearch(query)
+    try { return await serperSearch(query) } catch (e) { console.error('[web] Serper failed:', e.message) }
   }
-  return { status: 'error', message: 'No web search API configured. Set TAVILY_API_KEY or SERPER_API_KEY in .env' }
+  // Fallback to DuckDuckGo — free, no API key needed
+  try {
+    const result = await duckDuckGoSearch(query)
+    if (result.data.length > 0) return result
+  } catch (e) { console.error('[web] DuckDuckGo failed:', e.message) }
+  return { status: 'error', message: 'Web search unavailable. No search API configured and free fallback failed.' }
 }
 
 module.exports = { performWebSearch }

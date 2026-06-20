@@ -9,8 +9,6 @@ export default function Lounge(){
 
   const [novaState,setNovaState]=useState<NovaState>('idle')
   const [overlay,setOverlay]=useState<Overlay>(null)
-  const [voiceActive,setVoiceActive]=useState(false)
-  const [voiceSupported,setVoiceSupported]=useState(true)
   const stateRef=useRef<NovaState>('idle')
   const audioRef=useRef<HTMLAudioElement|null>(null)
   const recognitionRef=useRef<any>(null)
@@ -18,34 +16,46 @@ export default function Lounge(){
 
   stateRef.current=novaState
 
-  const synthRef = useRef<SpeechSynthesisUtterance | null>(null)
   const pollAudioRef = useRef<number>(0)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const cancelledSynth = useRef(false)
 
-  const speakText = useCallback((text: string) => {
-    if (!('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
-    cancelledSynth.current = false
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = 1.05
-    utterance.pitch = 1.0
-    synthRef.current = utterance
-    utterance.onstart = () => setNovaState('speaking')
-    utterance.onend = () => {
-      if (!cancelledSynth.current) {
-        setNovaState('idle')
-        synthRef.current = null
-      }
+  // ── AudioGate: mute mic while speaking ──
+  const isAgentSpeaking = useRef(false)
+  const clapCtxRef = useRef<AudioContext | null>(null)
+  const clapStreamRef = useRef<MediaStream | null>(null)
+  const clapRafRef = useRef<number>(0)
+
+  function micMute() {
+    isAgentSpeaking.current = true
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort() } catch {}
+      recognitionRef.current = null
     }
-    utterance.onerror = () => {
-      if (!cancelledSynth.current) setNovaState('idle')
+    clearTimeout(restartTimeoutRef.current)
+    if (clapRafRef.current) {
+      cancelAnimationFrame(clapRafRef.current)
+      clapRafRef.current = 0
     }
-    window.speechSynthesis.speak(utterance)
+    if (clapCtxRef.current) {
+      try { clapCtxRef.current.close() } catch {}
+      clapCtxRef.current = null
+    }
+    if (clapStreamRef.current) {
+      try { clapStreamRef.current.getTracks().forEach(t => t.stop()) } catch {}
+      clapStreamRef.current = null
+    }
+  }
+
+  const micUnmute = useCallback(() => {
+    isAgentSpeaking.current = false
   }, [])
+
+  // ── Wake-word pending ──
+  const wakeWordPending = useRef(false)
+  const listenTimeoutRef = useRef<number>(0)
 
   const sendCommand = useCallback(async (text: string) => {
     setNovaState('thinking')
+    clearTimeout(pollAudioRef.current)
     try {
       const res = await fetch('/api/voice-command', {
         method: 'POST',
@@ -57,9 +67,6 @@ export default function Lounge(){
         const map: Record<string, Overlay> = { SHOW_WALLET: 'wallet', SHOW_ANALYTICS: 'analytics', SHOW_BACKUP: 'backup', HIDE_DASHBOARD: null }
         setOverlay(map[data.intent] ?? overlay)
       }
-      // Speak text immediately via browser TTS
-      if (data.reply) speakText(data.reply)
-      // Poll for high-quality audio and switch when ready
       if (data.audioId) {
         const id = data.audioId
         const maxRetries = 30
@@ -72,18 +79,24 @@ export default function Lounge(){
               const statusRes = await fetch(`/api/audio-status/${id}`)
               const status = await statusRes.json()
               if (status.ready) {
-                // Cancel browser TTS first, then play high-quality audio
-                cancelledSynth.current = true
-                window.speechSynthesis.cancel()
-                await new Promise(r => setTimeout(r, 50))
+                micMute()
                 const audio = new Audio(`/api/audio/${id}.mp3`)
                 audioRef.current = audio
                 audio.onplay = () => setNovaState('speaking')
                 audio.onended = () => {
                   setNovaState('idle')
                   audioRef.current = null
+                  micUnmute()
                 }
-                audio.play().catch(() => {})
+                audio.onerror = () => {
+                  setNovaState('idle')
+                  audioRef.current = null
+                  micUnmute()
+                }
+                audio.play().catch(() => {
+                  setNovaState('idle')
+                  micUnmute()
+                })
               } else {
                 poll()
               }
@@ -91,20 +104,18 @@ export default function Lounge(){
           }, 500)
         }
         poll()
+      } else {
+        setTimeout(() => setNovaState('idle'), 800)
       }
     } catch {
       setNovaState('idle')
     }
-  }, [overlay, speakText])
+  }, [overlay])
 
-  // ── SpeechRecognition (voice input) ──
+  // ── SpeechRecognition with wake-word ──
   useEffect(() => {
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) {
-      setVoiceSupported(false)
-      return
-    }
-    setVoiceSupported(true)
+    if (!SpeechRecognition) return
 
     let recognition: any
     let stopped = false
@@ -112,6 +123,10 @@ export default function Lounge(){
 
     function startRec() {
       if (stopped || permissionDenied) return
+      if (isAgentSpeaking.current) {
+        restartTimeoutRef.current = window.setTimeout(startRec, 500)
+        return
+      }
       try {
         recognition = new SpeechRecognition()
         recognitionRef.current = recognition
@@ -119,39 +134,66 @@ export default function Lounge(){
         recognition.interimResults = false
         recognition.lang = 'en-US'
 
-        recognition.onstart = () => setVoiceActive(true)
-
         recognition.onresult = (ev: any) => {
-          if (stateRef.current === 'speaking' || stateRef.current === 'thinking') return
+          // AudioGate: discard all mic input while agent speaks
+          if (isAgentSpeaking.current) return
+          if (stateRef.current === 'thinking' || stateRef.current === 'speaking') return
+
           for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            const transcript = ev.results[i][0].transcript.trim()
-            if (!transcript) continue
-            // Send everything said as a command (no wake word required)
-            sendCommand(transcript)
-            return
+            const raw = ev.results[i][0].transcript.trim()
+            if (!raw) continue
+            const lower = raw.toLowerCase()
+
+            // If wake word is pending, treat this utterance as the command
+            if (wakeWordPending.current) {
+              wakeWordPending.current = false
+              clearTimeout(listenTimeoutRef.current)
+              setNovaState('idle')
+              sendCommand(raw)
+              return
+            }
+
+            // Look for wake word "nova"
+            const novaIdx = lower.indexOf('nova')
+            if (novaIdx !== -1) {
+              const after = lower.slice(novaIdx + 4).trim()
+              if (after) {
+                // "nova show wallet" → command after wake word
+                sendCommand(raw.slice(novaIdx + 4).trim())
+              } else {
+                // "nova" alone → enter listening mode, wait for next utterance
+                wakeWordPending.current = true
+                setNovaState('listening')
+                clearTimeout(listenTimeoutRef.current)
+                listenTimeoutRef.current = window.setTimeout(() => {
+                  wakeWordPending.current = false
+                  setNovaState('idle')
+                }, 8000)
+              }
+              return
+            }
           }
         }
 
         recognition.onerror = (err: any) => {
           if (err.error === 'not-allowed') {
             permissionDenied = true
-            setVoiceActive(false)
             return
           }
-          if (!stopped) {
+          if (!stopped && !isAgentSpeaking.current) {
             restartTimeoutRef.current = window.setTimeout(startRec, 1000)
           }
         }
 
         recognition.onend = () => {
-          if (!stopped && !permissionDenied) {
+          if (!stopped && !permissionDenied && !isAgentSpeaking.current) {
             restartTimeoutRef.current = window.setTimeout(startRec, 500)
           }
         }
 
         recognition.start()
       } catch {
-        if (!stopped) {
+        if (!stopped && !isAgentSpeaking.current) {
           restartTimeoutRef.current = window.setTimeout(startRec, 1000)
         }
       }
@@ -162,30 +204,13 @@ export default function Lounge(){
     return () => {
       stopped = true
       clearTimeout(restartTimeoutRef.current)
+      clearTimeout(listenTimeoutRef.current)
       try { if (recognition) recognition.abort() } catch {}
       recognitionRef.current = null
     }
   }, [sendCommand])
 
-  function pushToTalk() {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
-    if (!SpeechRecognition) return
-    setVoiceActive(true)
-    const rec = new SpeechRecognition()
-    rec.continuous = false
-    rec.interimResults = false
-    rec.lang = 'en-US'
-    rec.onresult = (ev: any) => {
-      const transcript = ev.results[0][0].transcript.trim()
-      if (transcript) sendCommand(transcript)
-      setVoiceActive(false)
-    }
-    rec.onerror = () => setVoiceActive(false)
-    rec.onend = () => setVoiceActive(false)
-    try { rec.start() } catch { setVoiceActive(false) }
-  }
-
-  // ── Clap detection via Web Audio API (Electron desktop) ──
+  // ── Clap detection (Electron desktop) ──
   useEffect(() => {
     const desktop = (window as any).novaDesktop
     if (!desktop?.isDesktop) return
@@ -208,7 +233,14 @@ export default function Lounge(){
         analyser.fftSize = 256
         source.connect(analyser)
 
+        clapCtxRef.current = audioCtx
+        clapStreamRef.current = stream
+
         function detect() {
+          if (isAgentSpeaking.current) {
+            raf = requestAnimationFrame(detect)
+            return
+          }
           analyser!.getByteTimeDomainData(dataArray)
           let sum = 0
           for (let i = 0; i < dataArray.length; i++) {
@@ -276,17 +308,30 @@ export default function Lounge(){
       const s=160,cx=s/2,cy=s/2,r=s*0.42
       ctx.clearRect(0,0,s,s)
 
+      const st=stateRef.current
+      const passive=st==='idle'
+      const energy=st==='speaking'?0.3:st==='listening'||st==='thinking'?0.15:0
+      const boltCount=passive?4:12
+      const boltAlpha=passive?0.06:0.4
+      const boltSpeed=passive?0.4:1
+
       const glow=ctx.createRadialGradient(cx,cy,0,cx,cy,r*1.2)
-      glow.addColorStop(0,'rgba(120,180,255,0.12)')
-      glow.addColorStop(0.5,'rgba(255,100,180,0.06)')
+      if (passive) {
+        glow.addColorStop(0,'rgba(120,180,255,0.04)')
+        glow.addColorStop(0.5,'rgba(255,100,180,0.02)')
+      } else {
+        glow.addColorStop(0,'rgba(120,180,255,0.12)')
+        glow.addColorStop(0.5,'rgba(255,100,180,0.06)')
+      }
       glow.addColorStop(1,'transparent')
       ctx.fillStyle=glow
       ctx.beginPath()
       ctx.arc(cx,cy,r*1.2,0,Math.PI*2)
       ctx.fill()
 
-      for(const bolt of bolts){
-        bolt.life+=0.5
+      const shown=bolts.slice(0,boltCount)
+      for(const bolt of shown){
+        bolt.life+=0.5*boltSpeed
         if(bolt.life>bolt.maxLife){
           const angle=Math.random()*Math.PI*2
           const targetDist=r*(0.7+Math.random()*0.4)
@@ -308,7 +353,7 @@ export default function Lounge(){
         for(let j=1;j<bolt.points.length;j++)ctx.lineTo(bolt.points[j].x,bolt.points[j].y)
         ctx.strokeStyle='rgba(100,200,255,0.4)'
         ctx.lineWidth=1
-        ctx.globalAlpha=Math.min(bolt.alpha*f,0.4)
+        ctx.globalAlpha=Math.min(bolt.alpha*f,boltAlpha)
         ctx.stroke()
         ctx.strokeStyle='rgba(255,100,200,0.08)'
         ctx.lineWidth=3
@@ -344,9 +389,9 @@ export default function Lounge(){
 
       const st=stateRef.current
       const baseY=h*0.6
-      const energy=st==='speaking'?0.3:0
-      const isActive=st==='thinking'||st==='speaking'
-      const amp=isActive?22*(1+energy*1.5):8
+      const isActive=st==='thinking'||st==='speaking'||st==='listening'
+      const energy=st==='speaking'?0.3:st==='listening'?0.15:0
+      const amp=isActive?22*(1+energy*1.5):4
 
       const layers=7
       for(let l=0;l<layers;l++){
@@ -394,16 +439,6 @@ export default function Lounge(){
     return ()=>{cancelAnimationFrame(raf);window.removeEventListener('resize',resize)}
   },[])
 
-  const handleInputSubmit = useCallback((e: React.FormEvent) => {
-    e.preventDefault()
-    const el = inputRef.current
-    const val = el?.value?.trim()
-    if (val && el) {
-      sendCommand(val)
-      el.value = ''
-    }
-  }, [sendCommand])
-
   return (
     <div>
       <div className="rainbow-bg" />
@@ -418,15 +453,6 @@ export default function Lounge(){
           <button className="close-btn" onClick={()=>setOverlay(null)}>✕</button>
         </div>
       </div>
-      <form className="text-input-bar" onSubmit={handleInputSubmit}>
-        <button type="button" className={`voice-toggle ${voiceActive?'listening':''} ${!voiceSupported?'hidden':''}`}
-          onClick={pushToTalk} title="Push to talk">
-          {voiceActive ? '🔴' : '🎙'}
-        </button>
-        <input ref={inputRef} type="text" placeholder={voiceSupported ? 'Say "Nova" or type...' : 'Type a command...'} />
-        <button type="submit">Send</button>
-      </form>
-      {!voiceSupported && <div className="voice-unavailable">Voice input not supported in this browser. Type above.</div>}
     </div>
   )
 }

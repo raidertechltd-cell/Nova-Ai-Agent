@@ -16,7 +16,6 @@ async function financeMinion({ command }) {
         paystack: paystackBalance.data || [],
         transactions,
       },
-      summary: `Retrieved wallet info with ${balances.length} balances and ${transactions.length} recent transactions.`,
     }
   } catch (err) {
     return { ok: false, error: err.message }
@@ -29,7 +28,6 @@ async function analyticsMinion({ command }) {
     return {
       ok: true,
       data: rows,
-      summary: `Retrieved ${rows.length} analytics records.`,
     }
   } catch (err) {
     return { ok: false, error: err.message }
@@ -37,15 +35,12 @@ async function analyticsMinion({ command }) {
 }
 
 async function studioMinion({ command }) {
-  // Studio handles creative/generative tasks and file operations
-  // Currently returns placeholder — expand when file management is needed
   return {
     ok: true,
     data: {
-      message: 'Studio capabilities are ready.',
-      storage: 'Backup and file operations available.',
+      status: 'ready',
+      capabilities: ['file_ops', 'backup'],
     },
-    summary: 'Studio agent ready. File listing and backup operations are available.',
   }
 }
 

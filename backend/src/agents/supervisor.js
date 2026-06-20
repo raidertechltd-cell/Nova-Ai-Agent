@@ -84,7 +84,9 @@ class SupervisorGraph {
       inferenceConfig: { maxTokens: 1024 },
     })
 
+    const tStart = Date.now()
     const response = await bedrock.send(cmd)
+    console.log(`[timing] Bedrock Converse: ${Date.now() - tStart}ms | tokens: ?`)
     const content = response.output?.message?.content || []
 
     const toolBlock = content.find((c) => c.toolUse)
@@ -114,11 +116,9 @@ class SupervisorGraph {
     // Execute the tool via registry (with security gate + logging built in)
     let toolResult = null
     if (toolName) {
+      const tTool = Date.now()
       toolResult = await registry.executeTool(toolName, toolParams, intent)
-      // If tool returned data, fold it into the reply
-      if (toolResult && toolResult.status === 'success' && toolResult.data) {
-        // Keep the Bedrock-generated reply as the spoken response
-      }
+      console.log(`[timing] tool.${toolName}: ${Date.now() - tTool}ms`)
     }
 
     return { reply, intent: toolName, toolResult }
@@ -128,17 +128,22 @@ class SupervisorGraph {
     const normalized = command.toLowerCase().trim()
 
     const cached = cacheGet(normalized)
-    if (cached) return cached
+    if (cached) {
+      console.log(`[timing] cache HIT for "${normalized.slice(0,40)}"`)
+      return cached
+    }
 
+    const tMem = Date.now()
     const context = await memory.query(command, 5)
+    console.log(`[timing] memory.query: ${Date.now() - tMem}ms`)
 
-    await memory.save(command, { role: 'user', source: 'voice' })
+    void memory.save(command, { role: 'user', source: 'voice' }).catch(console.error)
 
     const state = await this.supervisorNode({ command, context })
 
     const result = { reply: state.reply || 'Got it.', intent: state.intent }
     if (state.reply) {
-      await memory.save(state.reply, { role: 'assistant', intent: state.intent, source: 'voice' })
+      void memory.save(state.reply, { role: 'assistant', intent: state.intent, source: 'voice' }).catch(console.error)
     }
 
     if (state.reply && state.reply.length > 10) {

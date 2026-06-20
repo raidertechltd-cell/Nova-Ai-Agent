@@ -1,10 +1,9 @@
 const express = require('express')
 const crypto = require('crypto')
 const { SupervisorGraph } = require('../agents/supervisor')
-const { ttsToFile } = require('../tools/elevenlabs')
 const { transcribe } = require('../tools/whisper')
 const registry = require('../tools/registry')
-const audioStore = require('../audio-store')
+const ttsService = require('../tts-service')
 
 const router = express.Router()
 const supervisor = new SupervisorGraph()
@@ -23,14 +22,11 @@ function detectFastIntent(text) {
   return null
 }
 
-function generateAudioId() {
-  return crypto.randomBytes(6).toString('hex')
-}
-
 router.post('/', async (req, res) => {
   const tReq = Date.now()
   const { text } = req.body
-  console.log('[voice] received text:', typeof text === 'string' ? text.slice(0,200) : text)
+  const requestId = crypto.randomUUID()
+  console.log('[voice] requestId:', requestId, '| text:', typeof text === 'string' ? text.slice(0,200) : text)
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'text is required' })
   }
@@ -50,16 +46,11 @@ router.post('/', async (req, res) => {
       console.log(`[timing] supervisor.execute: ${Date.now() - tIntent}ms | intent: ${intent || 'none'}`)
     }
 
-    const audioId = generateAudioId()
-    audioStore.set(audioId, { ready: false })
-    ttsToFile(reply, audioId).then((id) => {
-      if (id) {
-        audioStore.set(audioId, { ready: true, url: `/api/audio/${audioId}.mp3` })
-      }
-    }).catch((err) => console.error('[voice] bg TTS failed:', err.message))
+    // ONLY the supervisor output is sent to TTS — single call, never duplicated
+    const { audioId } = ttsService.speak(reply, requestId)
 
     console.log(`[timing] total request: ${Date.now() - tReq}ms`)
-    res.json({ status: 'accepted', reply, audioId, intent })
+    res.json({ status: 'accepted', reply, audioId, intent, requestId })
   } catch (err) {
     console.error('[voice] pipeline error:', err)
     res.status(500).json({ error: err.message })
@@ -69,6 +60,7 @@ router.post('/', async (req, res) => {
 router.post('/transcribe', async (req, res) => {
   const t0 = Date.now()
   const { audio, mimeType } = req.body
+  const requestId = crypto.randomUUID()
   if (!audio) {
     return res.status(400).json({ error: 'audio is required' })
   }
@@ -94,16 +86,10 @@ router.post('/transcribe', async (req, res) => {
       console.log(`[timing] supervisor.execute: ${Date.now() - t0}ms | intent: ${intent || 'none'}`)
     }
 
-    const audioId = generateAudioId()
-    audioStore.set(audioId, { ready: false })
-    ttsToFile(reply, audioId).then((id) => {
-      if (id) {
-        audioStore.set(audioId, { ready: true, url: `/api/audio/${audioId}.mp3` })
-      }
-    }).catch((err) => console.error('[voice] bg TTS failed:', err.message))
+    const { audioId } = ttsService.speak(reply, requestId)
 
     console.log(`[timing] total: ${Date.now() - t0}ms`)
-    res.json({ status: 'accepted', transcript, reply, audioId, intent })
+    res.json({ status: 'accepted', transcript, reply, audioId, intent, requestId })
   } catch (err) {
     console.error('[voice] transcribe error:', err)
     res.status(500).json({ error: err.message })

@@ -3,6 +3,7 @@ const researchTools = require('./research_tools')
 const wallet = require('./wallet')
 const analytics = require('./analytics')
 const paystack = require('./paystack')
+const obsidian = require('./obsidian')
 const { logToolCall, checkDestructive } = require('../security_gate')
 
 const TOOL_DEFS = {
@@ -66,6 +67,30 @@ const TOOL_DEFS = {
     params: { query: { type: 'string', description: 'The search query' } },
     destructive: false,
     handler: async ({ query }) => researchTools.performWebSearch(query),
+  },
+  search_notes: {
+    description: 'Search Obsidian notes by name or content',
+    params: { query: { type: 'string', description: 'Search query to match against note names or content' } },
+    destructive: false,
+    handler: async ({ query }) => obsidian.searchNotes(query),
+  },
+  read_note: {
+    description: 'Read the content of an Obsidian note by its file path',
+    params: { path: { type: 'string', description: 'Relative path of the note within the vault (e.g. Projects/ideas.md)' } },
+    destructive: false,
+    handler: async ({ path }) => obsidian.readNote(path),
+  },
+  create_note: {
+    description: 'Create a new Obsidian note with the given content',
+    params: { path: { type: 'string', description: 'Relative path for the new note (e.g. Daily/2026-06-20.md)' }, content: { type: 'string', description: 'The markdown content to write' } },
+    destructive: true,
+    handler: async ({ path, content }) => obsidian.createNote(path, content),
+  },
+  list_notes: {
+    description: 'List all notes in the Obsidian vault',
+    params: {},
+    destructive: false,
+    handler: async () => obsidian.listNotes(),
   },
 }
 

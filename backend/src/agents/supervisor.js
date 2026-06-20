@@ -1,21 +1,27 @@
 const memory = require('../memory')
 const registry = require('../tools/registry')
+const { claudeConverse } = require('../tools/claude')
+
+const USE_CLAUDE = process.env.USE_CLAUDE === 'true' && process.env.ANTHROPIC_API_KEY
 
 const REGION = process.env.AWS_REGION || 'eu-west-1'
-const MODEL_ID = process.env.BEDROCK_MODEL || 'amazon.nova-micro-v1:0'
+const BEDROCK_MODEL = process.env.BEDROCK_MODEL || 'amazon.nova-micro-v1:0'
 
-const TOKEN = process.env.AWS_BEARER_TOKEN_BEDROCK
-const decoded = TOKEN ? Buffer.from(TOKEN, 'base64').toString('utf-8') : ''
-const colonIdx = decoded.indexOf(':')
-const ACCESS_KEY = colonIdx > 0 ? decoded.slice(0, colonIdx) : ''
-const SECRET_KEY = colonIdx > 0 ? decoded.slice(colonIdx + 1) : ''
+let bedrock = null
+if (!USE_CLAUDE) {
+  const TOKEN = process.env.AWS_BEARER_TOKEN_BEDROCK
+  const decoded = TOKEN ? Buffer.from(TOKEN, 'base64').toString('utf-8') : ''
+  const colonIdx = decoded.indexOf(':')
+  const ACCESS_KEY = colonIdx > 0 ? decoded.slice(0, colonIdx) : ''
+  const SECRET_KEY = colonIdx > 0 ? decoded.slice(colonIdx + 1) : ''
 
-const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime')
+  const { BedrockRuntimeClient, ConverseCommand } = require('@aws-sdk/client-bedrock-runtime')
 
-const bedrock = new BedrockRuntimeClient({
-  region: REGION,
-  credentials: { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY },
-})
+  bedrock = new BedrockRuntimeClient({
+    region: REGION,
+    credentials: { accessKeyId: ACCESS_KEY, secretAccessKey: SECRET_KEY },
+  })
+}
 
 const TOOLS = registry.getBedrockTools()
 
@@ -32,6 +38,10 @@ Available tools:
 - search_files: find files and folders in the workspace by name
 - list_directory: list contents of a directory in the workspace
 - web_search: perform a web search for real-time information, news, or research
+- search_notes: search Obsidian notes by name or content
+- read_note: read the content of an Obsidian note
+- create_note: create a new Obsidian note with markdown content
+- list_notes: list all notes in the Obsidian vault
 
 Always respond in a natural, empathetic tone. You are Nova — precise, efficient, and always in control.`
 
@@ -73,34 +83,44 @@ class SupervisorGraph {
       { role: 'user', content: [{ text: command }] },
     ]
 
-    const cmd = new ConverseCommand({
-      modelId: MODEL_ID,
-      system: [{ text: SYSTEM_PROMPT }],
-      messages,
-      toolConfig: {
-        tools: TOOLS,
-        toolChoice: { auto: {} },
-      },
-      inferenceConfig: { maxTokens: 1024 },
-    })
-
     const tStart = Date.now()
-    const response = await bedrock.send(cmd)
-    console.log(`[timing] Bedrock Converse: ${Date.now() - tStart}ms | tokens: ?`)
-    const content = response.output?.message?.content || []
+    let content, toolName, toolParams, reply
 
-    const toolBlock = content.find((c) => c.toolUse)
-    let intent = null
-    let toolName = null
-    let toolParams = {}
-    if (toolBlock?.toolUse) {
-      toolName = toolBlock.toolUse.name
-      toolParams = toolBlock.toolUse.input || {}
-      intent = toolName
+    if (USE_CLAUDE) {
+      const result = await claudeConverse(messages, SYSTEM_PROMPT, TOOLS)
+      console.log(`[timing] Claude: ${Date.now() - tStart}ms`)
+      content = []
+      if (result.toolUse) {
+        toolName = result.toolUse.name
+        toolParams = result.toolUse.input || {}
+        intent = toolName
+      }
+      reply = result.text ? stripThinking(result.text) : ''
+    } else {
+      const { ConverseCommand } = require('@aws-sdk/client-bedrock-runtime')
+      const cmd = new ConverseCommand({
+        modelId: BEDROCK_MODEL,
+        system: [{ text: SYSTEM_PROMPT }],
+        messages,
+        toolConfig: {
+          tools: TOOLS,
+          toolChoice: { auto: {} },
+        },
+        inferenceConfig: { maxTokens: 1024 },
+      })
+      const response = await bedrock.send(cmd)
+      console.log(`[timing] Bedrock Converse: ${Date.now() - tStart}ms`)
+      content = response.output?.message?.content || []
+      const toolBlock = content.find((c) => c.toolUse)
+      if (toolBlock?.toolUse) {
+        toolName = toolBlock.toolUse.name
+        toolParams = toolBlock.toolUse.input || {}
+        intent = toolName
+      }
+      const textBlock = content.find((c) => c.text)
+      reply = textBlock?.text ? stripThinking(textBlock.text) : ''
     }
 
-    const textBlock = content.find((c) => c.text)
-    let reply = textBlock?.text ? stripThinking(textBlock.text) : ''
     if (!reply && toolName) {
       reply = 'Got it.'
     }

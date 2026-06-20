@@ -12,6 +12,10 @@ let tray = null
 let mainWindow = null
 let ws = null
 
+// ── Error Handling ──
+process.on('uncaughtException', (e) => console.error('[electron] UNCAUGHT:', e.message, e.stack?.split('\n')[1]))
+process.on('unhandledRejection', (e) => console.error('[electron] UNHANDLED REJECTION:', e))
+
 // Auto-grant microphone permission (needed for capture)
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
@@ -221,12 +225,22 @@ function createWindow() {
     mainWindow.setIgnoreMouseEvents(true, { forward: true })
   }
 
-  mainWindow.loadURL(FRONTEND_URL)
+  mainWindow.loadURL(FRONTEND_URL).catch(e => console.error('[electron] loadURL failed:', e.message))
+
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
+    console.error(`[electron] Page failed to load: ${code} - ${desc}`)
+  })
+
+  mainWindow.webContents.on('crashed', () => {
+    console.error('[electron] RENDERER CRASHED')
+  })
 
   // Show a subtle border in DEV so you can see where the window is
   if (DEV) {
     mainWindow.webContents.on('did-finish-load', () => {
-      mainWindow.webContents.insertCSS('html { outline: 2px solid rgba(100,200,255,0.25); outline-offset: -2px; border-radius: 12px; }')
+      mainWindow.webContents.insertCSS('html { outline: 3px solid rgba(100,200,255,0.5); outline-offset: -2px; border-radius: 12px; }').catch(() => {})
+      mainWindow.webContents.insertCSS('body::before { content: "NOVA ●"; position: fixed; top: 8px; left: 50%; transform: translateX(-50%); color: rgba(100,200,255,0.6); font: 14px monospace; z-index: 99999; pointer-events: none; letter-spacing: 4px; }').catch(() => {})
+      console.log('[electron] DEV border injected')
     })
   }
 
@@ -238,7 +252,12 @@ function createWindow() {
     }
   })
 
-  if (DEV) mainWindow.webContents.openDevTools({ mode: 'detach' })
+  // DevTools via keyboard shortcut (F12) instead of auto-opening
+  mainWindow.webContents.on('before-input-event', (_e, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      mainWindow.webContents.toggleDevTools()
+    }
+  })
 }
 
 function createTray() {
@@ -279,8 +298,6 @@ function showWindow() {
   mainWindow.show()
   mainWindow.focus()
   mainWindow.setAlwaysOnTop(true)
-  // Flash the window briefly
-  mainWindow.once('focus', () => mainWindow.setAlwaysOnTop(false))
 }
 
 function connectWebSocket() {

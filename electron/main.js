@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, screen, session, desktopCapturer } = require('electron')
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, screen, session } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { exec, spawn } = require('child_process')
@@ -6,7 +6,7 @@ const { performance } = require('perf_hooks')
 
 const WS_PORT = process.env.WS_PORT || 4001
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://frontend-snowy-sigma-30.vercel.app'
-const DEV = !!process.env.ELECTRON_DEV
+const DEV = !!process.env.ELECTRON_DEV || !fs.existsSync(path.join(__dirname, '.production'))
 
 let tray = null
 let mainWindow = null
@@ -31,13 +31,23 @@ app.whenReady().then(() => {
   console.log(`[electron] Loading: ${FRONTEND_URL}`)
 })
 
-// ── CUA: Screen Capture ──
+// ── CUA: Screen Capture (via PowerShell — no native deps, no Chromium errors) ──
 ipcMain.handle('cua:screenshot', async () => {
   try {
-    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } })
-    if (!sources.length) return { error: 'no screen sources' }
-    const img = sources[0].thumbnail.toDataURL()
-    return { data: img }
+    const tmp = process.env.TEMP || 'C:\\Temp'
+    const out = path.join(tmp, `nova_ss_${Date.now()}.png`)
+    await psExec(`
+      Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+      $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+      $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+      $g = [System.Drawing.Graphics]::FromImage($bmp)
+      $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+      $bmp.Save('${out.replace(/\\/g, '\\\\')}', [System.Drawing.Imaging.ImageFormat]::Png)
+      $g.Dispose(); $bmp.Dispose()
+    `.trim().replace(/\n\s*/g, '; '))
+    const data = fs.readFileSync(out, { encoding: 'base64' })
+    fs.unlink(out, () => {})
+    return { data: `data:image/png;base64,${data}` }
   } catch (e) {
     return { error: e.message }
   }

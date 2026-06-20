@@ -26,6 +26,17 @@ export default function Lounge(){
   const clapStreamRef = useRef<MediaStream | null>(null)
   const clapRafRef = useRef<number>(0)
 
+  // ── Persistent AudioContext to bypass autoplay policy ──
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  function ensureAudioCtx() {
+    if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+      audioCtxRef.current = new AudioContext()
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume()
+    }
+  }
+
   function micMute() {
     isAgentSpeaking.current = true
     if (recognitionRef.current) {
@@ -100,6 +111,15 @@ export default function Lounge(){
                   audioRef.current = null
                   micUnmute()
                 }
+                // Play via AudioContext to respect autoplay policy
+                ensureAudioCtx()
+                if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+                  // Connect audio element to the primed AudioContext
+                  try {
+                    const src = audioCtxRef.current.createMediaElementSource(audio)
+                    src.connect(audioCtxRef.current.destination)
+                  } catch {} // Already connected
+                }
                 audio.play().catch(() => {
                   setNovaState('idle')
                   micUnmute()
@@ -157,6 +177,7 @@ export default function Lounge(){
               wakeWordPending.current = false
               clearTimeout(listenTimeoutRef.current)
               setNovaState('idle')
+              ensureAudioCtx()
               sendCommand(raw)
               return
             }
@@ -166,7 +187,8 @@ export default function Lounge(){
             if (novaIdx !== -1) {
               const after = lower.slice(novaIdx + 4).trim()
               if (after) {
-                // "nova show wallet" → command after wake word
+                // Prime audio system from user gesture (bypasses autoplay policy)
+                ensureAudioCtx()
                 sendCommand(raw.slice(novaIdx + 4).trim())
               } else {
                 // "nova" alone → enter listening mode, wait for next utterance

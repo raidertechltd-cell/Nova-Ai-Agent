@@ -162,6 +162,36 @@ export default function Lounge(){
       } else {
         setTimeout(() => setNovaState('idle'), 800)
       }
+      // ── CUA: Execute desktop actions via Electron bridge ──
+      const cuaResult = data.toolResult?.cuaAction
+      if (cuaResult) {
+        const desktop = (window as any).novaDesktop
+        if (desktop) {
+          const { type, params } = cuaResult
+          if (type === 'launch_app') desktop.launchApp(params.name, params.path)
+          else if (type === 'screen_capture') {
+            desktop.screenshot().then((r: any) => {
+              if (r.data) spawnWidget('image', 'Screen Capture', { src: r.data })
+            })
+          }
+          else if (type === 'mouse_click') desktop.mouseClick(params.button, params.x, params.y)
+          else if (type === 'keyboard_type') desktop.keyboardType(params.text)
+          else if (type === 'keyboard_shortcut') desktop.keyboardShortcut(params.keys)
+          else if (type === 'terminate_process') desktop.terminateProcess(params.pid, params.name)
+          else if (type === 'list_processes') {
+            desktop.listProcesses().then((r: any) => {
+              if (r.processes) spawnWidget('table', 'Running Processes', { columns: ['Name', 'PID', 'Memory'], rows: r.processes.map((p: any) => [p.name, p.pid, p.mem]) })
+            })
+          }
+          else if (type === 'focus_window') desktop.focusWindow(params.title)
+          else if (type === 'list_windows') {
+            desktop.listWindows().then((r: any) => {
+              if (r.windows) spawnWidget('table', 'Open Windows', { columns: ['Process', 'Title'], rows: r.windows.map((w: any) => [w.ProcessName, w.MainWindowTitle]) })
+            })
+          }
+        }
+      }
+
       // ── Background task polling ──
       if (data.taskId) {
         const pollBg = () => {
@@ -571,6 +601,8 @@ export default function Lounge(){
                 <div key={i} className="bar" style={{height:`${(v/Math.max(...w.data.values,1))*100}%`}} title={`${w.data.labels?.[i]||''}: ${v}`} />
               ))}
             </div><div className="chart-labels">{(w.data.labels||[]).join(' · ')}</div></>
+          ) : w.type === 'image' ? (
+            <img src={(w.data as any).src} alt="screen" className="widget-img" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '8px' }} />
           ) : w.type === 'text' ? (
             <div className="widget-text">{(w.data as any).content || w.data}</div>
           ) : (

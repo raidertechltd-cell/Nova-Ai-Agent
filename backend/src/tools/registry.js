@@ -6,6 +6,7 @@ const paystack = require('./paystack')
 const obsidian = require('./obsidian')
 const memory = require('../memory')
 const { logToolCall, checkDestructive } = require('../security_gate')
+const cua = require('./cua_tools')
 
 const CORE_TOOL_DEFS = {
   show_wallet: {
@@ -93,6 +94,17 @@ const CORE_TOOL_DEFS = {
     destructive: false,
     handler: async () => obsidian.listNotes(),
   },
+  // ── CUA (Computer-Using Agent) Tools ──
+  screen_analyze: cua.SCREEN_TOOL,
+  mouse_click: cua.MOUSE_CLICK_TOOL,
+  keyboard_type: cua.KEYBOARD_TYPE_TOOL,
+  keyboard_shortcut: cua.KEYBOARD_SHORTCUT_TOOL,
+  app_launch: cua.APP_LAUNCH_TOOL,
+  app_terminate: cua.APP_TERMINATE_TOOL,
+  list_processes: cua.LIST_PROCESSES_TOOL,
+  window_focus: cua.WINDOW_FOCUS_TOOL,
+  list_windows: cua.LIST_WINDOWS_TOOL,
+
   dynamic_widget: {
     description: 'Render arbitrary data in the glass overlay as a dynamic floating widget (tables, stat-cards, charts, text). Spawns a frosted-glass HUD element.',
     params: { widgetType: { type: 'string', description: 'One of: table, stats, chart, text, custom' }, title: { type: 'string', description: 'Widget title' }, data: { type: 'object', description: 'Structured data to render. For stats: [{label, value}]. For table: {columns: [...], rows: [[...]]}. For chart: {labels: [...], values: [...]}. For text: {content: string}.' }, position: { type: 'string', description: 'Optional. Where to spawn the widget: center, top-left, top-right, bottom-left, bottom-right. Defaults to center with cascade offset.' } },

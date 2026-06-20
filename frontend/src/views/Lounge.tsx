@@ -13,6 +13,7 @@ export default function Lounge(){
   const audioRef=useRef<HTMLAudioElement|null>(null)
   const recognitionRef=useRef<any>(null)
   const restartTimeoutRef=useRef<number>(0)
+  const startRecRef = useRef<(() => void) | null>(null)
 
   stateRef.current=novaState
 
@@ -47,6 +48,8 @@ export default function Lounge(){
 
   const micUnmute = useCallback(() => {
     isAgentSpeaking.current = false
+    // Re-start listening after a brief delay so audio system settles
+    setTimeout(() => startRecRef.current?.(), 300)
   }, [])
 
   // ── Wake-word pending ──
@@ -122,6 +125,7 @@ export default function Lounge(){
     let permissionDenied = false
 
     function startRec() {
+      startRecRef.current = startRec
       if (stopped || permissionDenied) return
       if (isAgentSpeaking.current) {
         restartTimeoutRef.current = window.setTimeout(startRec, 500)

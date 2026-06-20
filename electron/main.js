@@ -18,6 +18,13 @@ app.whenReady().then(() => {
     if (permission === 'media' || permission === 'mediaKeySystem') return callback(true)
     callback(false)
   })
+
+  createWindow()
+  createTray()
+  connectWebSocket()
+
+  console.log(`[electron] Nova HUD started — DEV=${DEV}`)
+  console.log(`[electron] Loading: ${FRONTEND_URL}`)
 })
 
 // ── CUA: Screen Capture ──
@@ -172,39 +179,63 @@ ipcMain.handle('cua:list-windows', async () => {
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
 
-  mainWindow = new BrowserWindow({
-    width,
-    height,
-    x: 0, y: 0,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    fullscreen: !DEV,
-    hasShadow: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  })
-
-  // Make clicks pass through when not interacting with widgets
-  mainWindow.setIgnoreMouseEvents(true, { forward: true })
+  if (DEV) {
+    // Dev mode: transparent HUD with visible border for debugging
+    mainWindow = new BrowserWindow({
+      width: 520,
+      height: 800,
+      x: width - 560,
+      y: 40,
+      frame: false,
+      transparent: true,
+      resizable: true,
+      skipTaskbar: false,
+      alwaysOnTop: true,
+      fullscreen: false,
+      hasShadow: true,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+  } else {
+    // Production: fullscreen transparent HUD overlay
+    mainWindow = new BrowserWindow({
+      width,
+      height,
+      x: 0, y: 0,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      fullscreen: true,
+      hasShadow: false,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+    mainWindow.setIgnoreMouseEvents(true, { forward: true })
+  }
 
   mainWindow.loadURL(FRONTEND_URL)
 
-  // Hide instead of close
+  // Show a subtle border in DEV so you can see where the window is
+  if (DEV) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      mainWindow.webContents.insertCSS('html { outline: 2px solid rgba(100,200,255,0.25); outline-offset: -2px; border-radius: 12px; }')
+    })
+  }
+
+  // Never hide on blur — HUD stays up until explicitly closed
   mainWindow.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault()
       mainWindow.hide()
     }
-  })
-
-  mainWindow.on('blur', () => {
-    if (!DEV) mainWindow.hide()
   })
 
   if (DEV) mainWindow.webContents.openDevTools({ mode: 'detach' })
@@ -278,13 +309,6 @@ ipcMain.on('wake-signal', () => {
   showWindow()
   // Also forward to WebSocket so ws-server logs and relays it
   try { if (ws?.readyState === 1) ws.send('WAKE_SIGNAL') } catch {}
-})
-
-app.whenReady().then(() => {
-  createWindow()
-  createTray()
-  connectWebSocket()
-  console.log('[electron] Nova desktop running, tray active')
 })
 
 app.on('window-all-closed', () => {

@@ -2,6 +2,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, screen, session, d
 const path = require('path')
 const fs = require('fs')
 const { exec, spawn } = require('child_process')
+const { performance } = require('perf_hooks')
 
 const WS_PORT = process.env.WS_PORT || 4001
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://frontend-snowy-sigma-30.vercel.app'
@@ -31,12 +32,19 @@ ipcMain.handle('cua:screenshot', async () => {
   }
 })
 
-// ── CUA: Mouse Control ──
-ipcMain.handle('cua:mouse-move', (_, { x, y }) => {
+// ── CUA: Mouse Control (via PowerShell — no native deps) ──
+function psExec(script) {
+  return new Promise((resolve, reject) => {
+    exec(`powershell -NoProfile -Command "${script.replace(/"/g, '\\"')}"`, { timeout: 10000 }, (err, stdout) => {
+      if (err) return reject(err)
+      resolve(stdout.trim())
+    })
+  })
+}
+
+ipcMain.handle('cua:mouse-move', async (_, { x, y }) => {
   try {
-    const { mouse, straightTo } = require('@nut-tree/nut-js')
-    mouse.config.mouseSpeed = 1000
-    mouse.move(straightTo({ x, y }))
+    await psExec(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x},${y})`)
     return { ok: true }
   } catch (e) {
     return { error: e.message }
@@ -45,24 +53,36 @@ ipcMain.handle('cua:mouse-move', (_, { x, y }) => {
 
 ipcMain.handle('cua:mouse-click', async (_, { button, x, y }) => {
   try {
-    const { mouse, Button, straightTo } = require('@nut-tree/nut-js')
-    if (x !== undefined && y !== undefined) {
-      mouse.config.mouseSpeed = 1000
-      await mouse.move(straightTo({ x, y }))
+    const btn = button === 'right' ? 'Right' : 'Left'
+    if (x !== undefined && y !== null && y !== undefined && x !== null) {
+      await psExec(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x},${y})`)
     }
-    const btn = button === 'right' ? Button.RIGHT : Button.LEFT
-    await mouse.click(btn)
+    await psExec(`
+      Add-Type -AssemblyName System.Windows.Forms
+      Add-Type -Name Win32 -MemberDefinition @"
+[DllImport("user32.dll")]
+public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, int dwExtraInfo);
+"@
+      $btn = 0x0002; $up = 0x0004
+      if ('${btn}' -eq 'Right') { $btn = 0x0008; $up = 0x0010 }
+      [Win32]::mouse_event($btn, 0, 0, 0, 0)
+      Start-Sleep -Milliseconds 50
+      [Win32]::mouse_event($up, 0, 0, 0, 0)
+    `.trim().replace(/\n\s*/g, '; '))
     return { ok: true }
   } catch (e) {
     return { error: e.message }
   }
 })
 
-// ── CUA: Keyboard Control ──
+// ── CUA: Keyboard Control (via PowerShell) ──
 ipcMain.handle('cua:keyboard-type', async (_, { text }) => {
   try {
-    const { keyboard, Key } = require('@nut-tree/nut-js')
-    await keyboard.type(text)
+    const escaped = text.replace(/'/g, "''")
+    await psExec(`
+      Add-Type -AssemblyName System.Windows.Forms
+      [System.Windows.Forms.SendKeys]::SendWait('${escaped}')
+    `.trim().replace(/\n\s*/g, '; '))
     return { ok: true }
   } catch (e) {
     return { error: e.message }
@@ -71,11 +91,22 @@ ipcMain.handle('cua:keyboard-type', async (_, { text }) => {
 
 ipcMain.handle('cua:keyboard-shortcut', async (_, { keys }) => {
   try {
-    const { keyboard, Key } = require('@nut-tree/nut-js')
-    const keyMap = { control: Key.LeftControl, alt: Key.LeftAlt, shift: Key.LeftShift, tab: Key.Tab, enter: Key.Enter, escape: Key.Escape, space: Key.Space, c: 'c', v: 'v', a: 'a', s: 's', f: 'f', n: 'n', t: 't', w: 'w' }
-    const combo = keys.split('+').map(k => keyMap[k.trim().toLowerCase()] || k.trim())
-    await keyboard.pressKey(...combo)
-    await keyboard.releaseKey(...combo)
+    const keyMap = {
+      control: '^', ctrl: '^', alt: '%', shift: '+',
+      tab: '{TAB}', enter: '~', escape: '{ESC}', space: ' ',
+      backspace: '{BACKSPACE}', delete: '{DELETE}',
+      up: '{UP}', down: '{DOWN}', left: '{LEFT}', right: '{RIGHT}',
+      home: '{HOME}', end: '{END}', pgup: '{PGUP}', pgdn: '{PGDN}',
+      f1: '{F1}', f2: '{F2}', f3: '{F3}', f4: '{F4}', f5: '{F5}',
+      f6: '{F6}', f7: '{F7}', f8: '{F8}', f9: '{F9}', f10: '{F10}',
+      f11: '{F11}', f12: '{F12}',
+    }
+    const parts = keys.split('+').map(k => keyMap[k.trim().toLowerCase()] || k.trim())
+    const sendKeys = parts.map(p => p.length === 1 && !p.startsWith('{') && !p.startsWith('^') && !p.startsWith('%') && !p.startsWith('+') ? p : p).join('')
+    await psExec(`
+      Add-Type -AssemblyName System.Windows.Forms
+      [System.Windows.Forms.SendKeys]::SendWait('${sendKeys.replace(/'/g, "''")}')
+    `.trim().replace(/\n\s*/g, '; '))
     return { ok: true }
   } catch (e) {
     return { error: e.message }

@@ -2,6 +2,7 @@ const express = require('express')
 const crypto = require('crypto')
 const { SupervisorGraph } = require('../agents/supervisor')
 const { transcribe } = require('../tools/whisper')
+const taskQueue = require('../task-queue')
 const ttsService = require('../tts-service')
 
 const router = express.Router()
@@ -22,6 +23,7 @@ router.post('/', async (req, res) => {
 
   // Emergency Override: Nova, Stand Down
   if (isStandDown(text)) {
+    taskQueue.cancelAll()
     const reply = 'Standing down, sir.'
     const { audioId } = ttsService.speak(reply, requestId)
     return res.json({ status: 'accepted', reply, audioId, intent: 'stand_down', requestId })
@@ -35,7 +37,7 @@ router.post('/', async (req, res) => {
     const { audioId } = ttsService.speak(result.reply, requestId)
 
     console.log(`[timing] total request: ${Date.now() - tReq}ms`)
-    res.json({ status: 'accepted', reply: result.reply, audioId, intent: result.intent, requestId, widget: widgetData })
+    res.json({ status: 'accepted', reply: result.reply, audioId, intent: result.intent, requestId, widget: widgetData, taskId: result.taskId })
   } catch (err) {
     console.error('[voice] pipeline error:', err)
     res.status(500).json({ error: err.message })
@@ -71,11 +73,21 @@ router.post('/transcribe', async (req, res) => {
     const { audioId } = ttsService.speak(result.reply, requestId)
 
     console.log(`[timing] total: ${Date.now() - t0}ms`)
-    res.json({ status: 'accepted', transcript, reply: result.reply, audioId, intent: result.intent, requestId, widget: widgetData })
+    res.json({ status: 'accepted', transcript, reply: result.reply, audioId, intent: result.intent, requestId, widget: widgetData, taskId: result.taskId })
   } catch (err) {
     console.error('[voice] transcribe error:', err)
     res.status(500).json({ error: err.message })
   }
+})
+
+router.get('/task-status/:id', (req, res) => {
+  const status = taskQueue.getStatus(req.params.id)
+  if (!status) return res.status(404).json({ error: 'task not found' })
+  res.json(status)
+})
+
+router.get('/tasks', (req, res) => {
+  res.json({ active: taskQueue.listActive(), recent: taskQueue.listRecent(20) })
 })
 
 module.exports = router

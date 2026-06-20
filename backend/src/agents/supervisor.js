@@ -1,5 +1,6 @@
 const memory = require('../memory')
 const registry = require('../tools/registry')
+const taskQueue = require('../task-queue')
 const { claudeConverse } = require('../tools/claude')
 
 const USE_CLAUDE = process.env.USE_CLAUDE === 'true' && process.env.ANTHROPIC_API_KEY
@@ -44,8 +45,13 @@ MISSION CORE:
 3. Use dynamic_widget to render ANY data in the glass overlay — tables, stats cards, charts, text. Let the LLM decide the best visual representation.
 4. When sir requests something and NO tool matches, say: "I do not have a tool for [Task]. Should I build one, or pull data from an existing source?"
 
+MULTI-TASKING:
+1. Nova can handle multiple tasks in parallel. Long-running tasks (web search, deep research) run in the background while sir gives new commands.
+2. When a background task completes, Nova will chime and present the results without interrupting the conversation flow.
+3. If sir gives a new command while a task is running, both execute concurrently.
+
 EMERGENCY OVERRIDE:
-- If sir says "Nova, Stand Down": instantly acknowledge, terminate any active operations, clear all holograms, and enter a dormant safe state. Reply only: "Standing down, sir."
+- If sir says "Nova, Stand Down": instantly acknowledge, terminate all active background tasks, clear all holograms, and enter a dormant safe state. Reply only: "Standing down, sir."
 
 SAFETY:
 - Never deploy code, commit changes, or finalize ad campaigns without explicit voice confirmation from sir.
@@ -139,15 +145,25 @@ class SupervisorGraph {
       { role: 'assistant', content: [{ text: reply }] }
     )
 
-    // Execute the tool via registry (with security gate + logging built in)
+    // Execute tool — fast tools run inline, slow tools dispatch to background task queue
     let toolResult = null
+    let taskId = null
     if (toolName) {
       const tTool = Date.now()
-      toolResult = await registry.executeTool(toolName, toolParams, intent)
-      console.log(`[timing] tool.${toolName}: ${Date.now() - tTool}ms`)
+      const isSlow = toolName === 'web_search' || toolName === 'search_notes'
+
+      if (isSlow) {
+        taskId = taskQueue.enqueue(toolName, async () => {
+          return await registry.executeTool(toolName, toolParams, intent)
+        })
+        reply = `Starting ${toolName.replace(/_/g, ' ')} in the background, sir. I'll let you know when it's ready.`
+      } else {
+        toolResult = await registry.executeTool(toolName, toolParams, intent)
+        console.log(`[timing] tool.${toolName}: ${Date.now() - tTool}ms`)
+      }
     }
 
-    return { reply, intent: toolName, toolResult }
+    return { reply, intent: toolName, toolResult, taskId }
   }
 
   async execute(command) {
@@ -167,7 +183,7 @@ class SupervisorGraph {
 
     const state = await this.supervisorNode({ command, context })
 
-    const result = { reply: state.reply || 'Got it.', intent: state.intent, toolResult: state.toolResult }
+    const result = { reply: state.reply || 'Got it.', intent: state.intent, toolResult: state.toolResult, taskId: state.taskId || null }
     if (state.reply) {
       void memory.save(state.reply, { role: 'assistant', intent: state.intent, source: 'voice' }).catch(console.error)
     }

@@ -114,7 +114,6 @@ export default function Lounge(){
                 // Play via AudioContext to respect autoplay policy
                 ensureAudioCtx()
                 if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-                  // Connect audio element to the primed AudioContext
                   try {
                     const src = audioCtxRef.current.createMediaElementSource(audio)
                     src.connect(audioCtxRef.current.destination)
@@ -133,6 +132,32 @@ export default function Lounge(){
         poll()
       } else {
         setTimeout(() => setNovaState('idle'), 800)
+      }
+      // ── Background task polling ──
+      if (data.taskId) {
+        const pollBg = () => {
+          setTimeout(async () => {
+            try {
+              const r = await fetch(`/api/voice-command/task-status/${data.taskId}`)
+              const s = await r.json()
+              if (s.status === 'done') {
+                if (s.result?.widget) {
+                  setWidgetData(s.result.widget)
+                  setOverlay(true)
+                }
+                // Play short notification
+                const chime = new Audio('/api/audio/task-done.mp3')
+                chime.volume = 0.3
+                chime.play().catch(() => {})
+              } else if (s.status === 'failed') {
+                console.warn('[task] background task failed:', s.error)
+              } else if (s.status === 'running' || s.status === 'pending') {
+                pollBg()
+              }
+            } catch { pollBg() }
+          }, 2000)
+        }
+        pollBg()
       }
     } catch {
       setNovaState('idle')

@@ -1,15 +1,21 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
 type NovaState = 'idle' | 'listening' | 'thinking' | 'speaking'
-type WidgetData = { type: string; title: string; data: any }
+type FloatWidget = {
+  id: string; type: string; title: string; data: any
+  x: number; y: number; zIndex: number
+  width: number; height: number
+}
 
 export default function Lounge(){
   const miniOrbRef=useRef<HTMLCanvasElement>(null)
   const waveRef=useRef<HTMLCanvasElement>(null)
 
   const [novaState,setNovaState]=useState<NovaState>('idle')
-  const [overlay,setOverlay]=useState<boolean>(false)
-  const [widgetData,setWidgetData]=useState<WidgetData|null>(null)
+  const [floatingWidgets,setFloatingWidgets]=useState<FloatWidget[]>([])
+  const nextZ=useRef(10)
+  const dragRef=useRef<{id:string;startX:number;startY:number;origX:number;origY:number;moving:boolean}|null>(null)
+  const resizeRef=useRef<{id:string;startX:number;startY:number;origW:number;origH:number;moving:boolean}|null>(null)
   const stateRef=useRef<NovaState>('idle')
   const audioRef=useRef<HTMLAudioElement|null>(null)
   const recognitionRef=useRef<any>(null)
@@ -35,6 +41,31 @@ export default function Lounge(){
     if (audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume()
     }
+  }
+
+  // ── Floating Widget Manager ──
+  function spawnWidget(type: string, title: string, data: any, position?: string) {
+    const id = 'w-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)
+    const w = 380, h = 280
+    const cascade = floatingWidgets.length * 28
+    let x = window.innerWidth/2 - w/2 + cascade
+    let y = window.innerHeight/2 - h/2 + cascade
+    if (position === 'top-left') { x = 20 + cascade; y = 20 + cascade }
+    else if (position === 'top-right') { x = window.innerWidth - w - 20 - cascade; y = 20 + cascade }
+    else if (position === 'bottom-left') { x = 20 + cascade; y = window.innerHeight - h - 20 - cascade }
+    else if (position === 'bottom-right') { x = window.innerWidth - w - 20 - cascade; y = window.innerHeight - h - 20 - cascade }
+    const z = nextZ.current++
+    setFloatingWidgets(prev => [...prev, {
+      id, type, title, data,
+      x, y, zIndex: z, width: w, height: h,
+    }])
+  }
+  function dismissWidget(id: string) {
+    setFloatingWidgets(prev => prev.filter(w => w.id !== id))
+  }
+  function dismissAllWidgets() {
+    setFloatingWidgets([])
+    nextZ.current = 10
   }
 
   function micMute() {
@@ -79,11 +110,9 @@ export default function Lounge(){
       })
       const data = await res.json()
       if (data.widget) {
-        setWidgetData(data.widget)
-        setOverlay(true)
+        spawnWidget(data.widget.type || 'custom', data.widget.title || '', data.widget.data || data.widget, data.widget.position)
       } else if (data.intent === 'hide_overlay' || data.intent === 'stand_down') {
-        setOverlay(false)
-        setWidgetData(null)
+        dismissAllWidgets()
       }
       if (data.audioId) {
         const id = data.audioId
@@ -142,8 +171,7 @@ export default function Lounge(){
               const s = await r.json()
               if (s.status === 'done') {
                 if (s.result?.widget) {
-                  setWidgetData(s.result.widget)
-                  setOverlay(true)
+                  spawnWidget(s.result.widget.type || 'custom', s.result.widget.title || '', s.result.widget.data || s.result.widget, s.result.widget.position)
                 }
                 // Play short notification
                 const chime = new Audio('/api/audio/task-done.mp3')
@@ -494,67 +522,63 @@ export default function Lounge(){
     return ()=>{cancelAnimationFrame(raf);window.removeEventListener('resize',resize)}
   },[])
 
-  function closeOverlay(){
-    setOverlay(false)
-    setWidgetData(null)
-  }
+  // ── Drag handlers (mounted on document while dragging) ──
+  useEffect(() => {
+    function onMouseMove(e: MouseEvent) {
+      const d = dragRef.current
+      if (d) {
+        d.moving = true
+        setFloatingWidgets(prev => prev.map(w => w.id === d.id ? { ...w, x: d.origX + (e.clientX - d.startX), y: d.origY + (e.clientY - d.startY) } : w))
+      }
+      const r = resizeRef.current
+      if (r) {
+        r.moving = true
+        setFloatingWidgets(prev => prev.map(w => w.id === r.id ? { ...w, width: Math.max(200, r.origW + (e.clientX - r.startX)), height: Math.max(120, r.origH + (e.clientY - r.startY)) } : w))
+      }
+    }
+    function onMouseUp() {
+      if (dragRef.current) dragRef.current = null
+      if (resizeRef.current) resizeRef.current = null
+    }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => { window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp) }
+  }, [])
 
-  function DynamicWidget({ widget }: { widget: WidgetData }) {
-    if (widget.type === 'stats' && Array.isArray(widget.data)) {
-      return (
-        <>
-          <h3>{widget.title}</h3>
-          <div className="stat-grid">
-            {(widget.data as {label:string;value:string|number}[]).map((s,i) => (
-              <div key={i} className="stat-card">
-                <div className="label">{s.label}</div>
-                <div className="value">{s.value}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )
-    }
-    if (widget.type === 'table') {
-      const { columns, rows } = widget.data
-      return (
-        <>
-          <h3>{widget.title}</h3>
-          <table className="widget-table">
-            <thead><tr>{columns.map((c:string,i:number) => <th key={i}>{c}</th>)}</tr></thead>
-            <tbody>{rows.map((r:any[],i:number) => <tr key={i}>{r.map((v:any,j:number) => <td key={j}>{v}</td>)}</tr>)}</tbody>
-          </table>
-        </>
-      )
-    }
-    if (widget.type === 'chart') {
-      const { labels, values } = widget.data
-      const max = Math.max(...values, 1)
-      return (
-        <>
-          <h3>{widget.title}</h3>
-          <div className="bar-chart">
-            {values.map((v:number,i:number) => (
-              <div key={i} className="bar" style={{height:`${(v/max)*100}%`}} title={`${labels[i]}: ${v}`} />
-            ))}
-          </div>
-          <div className="chart-labels">{labels.join(' · ')}</div>
-        </>
-      )
-    }
-    if (widget.type === 'text') {
-      return (
-        <>
-          <h3>{widget.title}</h3>
-          <div className="widget-text">{(widget.data as any).content || widget.data}</div>
-        </>
-      )
-    }
+  function FloatingWidget({ w }: { w: FloatWidget }) {
     return (
-      <>
-        <h3>{widget.title || 'Data'}</h3>
-        <pre className="widget-raw">{JSON.stringify(widget.data, null, 2)}</pre>
-      </>
+      <div className={`float-widget ${w.type}`} style={{ left: w.x, top: w.y, width: w.width, height: w.height, zIndex: w.zIndex }}
+        onMouseDown={() => setFloatingWidgets(prev => prev.map(fw => fw.id === w.id ? { ...fw, zIndex: nextZ.current++ } : fw))}>
+        <div className="float-header" onMouseDown={(e) => { dragRef.current = { id: w.id, startX: e.clientX, startY: e.clientY, origX: w.x, origY: w.y, moving: false } }}>
+          <span className="float-title">{w.title || 'Nova HUD'}</span>
+          <button className="float-close" onMouseDown={(e) => e.stopPropagation()} onClick={() => dismissWidget(w.id)}>✕</button>
+        </div>
+        <div className="float-body">
+          {w.type === 'stats' && Array.isArray(w.data) ? (
+            <div className="stat-grid">
+              {(w.data as {label:string;value:string|number}[]).map((s,i) => (
+                <div key={i} className="stat-card"><div className="label">{s.label}</div><div className="value">{s.value}</div></div>
+              ))}
+            </div>
+          ) : w.type === 'table' && w.data?.columns ? (
+            <table className="widget-table">
+              <thead><tr>{w.data.columns.map((c:string,i:number) => <th key={i}>{c}</th>)}</tr></thead>
+              <tbody>{w.data.rows.map((r:any[],i:number) => <tr key={i}>{r.map((v:any,j:number) => <td key={j}>{v}</td>)}</tr>)}</tbody>
+            </table>
+          ) : w.type === 'chart' && w.data?.values ? (
+            <><div className="bar-chart">
+              {w.data.values.map((v:number,i:number) => (
+                <div key={i} className="bar" style={{height:`${(v/Math.max(...w.data.values,1))*100}%`}} title={`${w.data.labels?.[i]||''}: ${v}`} />
+              ))}
+            </div><div className="chart-labels">{(w.data.labels||[]).join(' · ')}</div></>
+          ) : w.type === 'text' ? (
+            <div className="widget-text">{(w.data as any).content || w.data}</div>
+          ) : (
+            <pre className="widget-raw">{JSON.stringify(w.data, null, 2)}</pre>
+          )}
+        </div>
+        <div className="float-resize" onMouseDown={(e) => { e.stopPropagation(); resizeRef.current = { id: w.id, startX: e.clientX, startY: e.clientY, origW: w.width, origH: w.height, moving: false } }} />
+      </div>
     )
   }
 
@@ -566,13 +590,7 @@ export default function Lounge(){
         <canvas ref={miniOrbRef} />
       </div>
       <canvas id="wave-canvas" ref={waveRef} />
-      <div className={`glass-overlay ${overlay?'active':''}`}>
-        <div className="backdrop" onClick={closeOverlay} />
-        <div className="panel">
-          <button className="close-btn" onClick={closeOverlay}>✕</button>
-          {widgetData && <DynamicWidget widget={widgetData} />}
-        </div>
-      </div>
+      {floatingWidgets.map(fw => <FloatingWidget key={fw.id} w={fw} />)}
     </div>
   )
 }

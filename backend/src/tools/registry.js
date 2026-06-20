@@ -94,11 +94,11 @@ const CORE_TOOL_DEFS = {
     handler: async () => obsidian.listNotes(),
   },
   dynamic_widget: {
-    description: 'Render arbitrary data in the glass overlay as a dynamic widget (tables, stat-cards, charts, text). Pass the rendered HTML or structured data as JSON.',
-    params: { widgetType: { type: 'string', description: 'One of: table, stats, chart, text, custom' }, title: { type: 'string', description: 'Widget title' }, data: { type: 'object', description: 'Structured data to render. For stats: [{label, value}]. For table: {columns: [...], rows: [[...]]}. For chart: {labels: [...], values: [...]}. For text: {content: string}.' } },
+    description: 'Render arbitrary data in the glass overlay as a dynamic floating widget (tables, stat-cards, charts, text). Spawns a frosted-glass HUD element.',
+    params: { widgetType: { type: 'string', description: 'One of: table, stats, chart, text, custom' }, title: { type: 'string', description: 'Widget title' }, data: { type: 'object', description: 'Structured data to render. For stats: [{label, value}]. For table: {columns: [...], rows: [[...]]}. For chart: {labels: [...], values: [...]}. For text: {content: string}.' }, position: { type: 'string', description: 'Optional. Where to spawn the widget: center, top-left, top-right, bottom-left, bottom-right. Defaults to center with cascade offset.' } },
     destructive: false,
-    handler: async ({ widgetType, title, data }) => {
-      return { status: 'success', widget: { type: widgetType, title, data }, data: `Rendered ${widgetType} widget: ${title}` }
+    handler: async ({ widgetType, title, data, position }) => {
+      return { status: 'success', widget: { type: widgetType, title, data, position }, data: `Rendered ${widgetType} widget: ${title}` }
     },
   },
 }
